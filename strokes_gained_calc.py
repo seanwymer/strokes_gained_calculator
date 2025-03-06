@@ -1,174 +1,160 @@
 import pandas as pd
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-import time
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
+import streamlit as st
 
-def load_data(round_file, distance_table_file):
-    """
-    Load and merge the round data and distance table.
-    """
-    # Load round data with error handling
-    round_df = pd.read_csv(round_file, on_bad_lines='skip')  # This will skip problematic rows
-    
-    # Drop the unnecessary index column if it exists
-    if 'Unnamed: 0' in round_df.columns:
-        round_df = round_df.drop(columns=['Unnamed: 0'])
-    
-    # Load distance table
-    distance_df = pd.read_csv(distance_table_file)
-    
-    # Merge the data based on course name and hole number
-    merged_df = round_df.merge(distance_df, on=['course_name', 'hole_number'], how='left', suffixes=('_round', '_distance'))
-    
-    # Print column names to verify
-    print("Available columns:", merged_df.columns.tolist())
-    
-    return merged_df
-
-def assign_shot_numbers(df):
-    """
-    Assign sequential shot numbers for each player's hole.
-    """
-    df['shot'] = df.groupby(['player_name', 'round_id', 'hole_number']).cumcount() + 1
-    return df
-
-def determine_starting_distance(df):
-    """
-    Determine the correct starting distance based on par value.
-    """
-    df['starting_distance'] = df.apply(
-        lambda row: row['yardage'] if row['par_distance'] in [4, 5] else row['approach_distance'], axis=1
-    )
-    
-    # If starting distance is missing, leave it blank
-    df['starting_distance'] = df['starting_distance'].apply(lambda x: '' if pd.isna(x) else x)
-    
-    return df
-
-def get_strokes_gained(start_lie, start_distance, landing_lie, landing_distance):
-    """
-    Automate Golfity website interaction to retrieve strokes gained values.
-    """
-    # Convert lie descriptions to codes
-    lie_codes = {
-        'Tee': 't',
-        'Fairway': 'f',
-        'Rough': 'r',
-        'Sand': 's',
-        'Green': 'g'
-    }
-    
-    # Debug print
-    print(f"Attempting calculation with: Start lie: {start_lie}, Start distance: {start_distance}, Landing lie: {landing_lie}, Landing distance: {landing_distance}")
-    
-    driver = webdriver.Chrome()
+def load_data(player_data_path, course_data_path):
+    """Load player and course data from CSV files"""
     try:
-        driver.get("https://www.golfity.com/strokes-gained-calculator")
-        wait = WebDriverWait(driver, 10)  # Wait up to 10 seconds
-        
-        # Wait for and select starting location lie
-        start_lie_dropdown = wait.until(
-            EC.presence_of_element_located((By.ID, "start_lie"))
-        )
-        start_lie_code = lie_codes.get(start_lie, 'f')  # default to fairway if unknown
-        start_lie_dropdown.send_keys(start_lie_code)
-        
-        # Input starting distance
-        start_distance_input = wait.until(
-            EC.presence_of_element_located((By.ID, "start_distance"))
-        )
-        start_distance_input.send_keys(str(start_distance))
-        
-        # Select landing location lie
-        landing_lie_dropdown = wait.until(
-            EC.presence_of_element_located((By.ID, "end_lie"))
-        )
-        landing_lie_code = lie_codes.get(landing_lie, 'f')  # default to fairway if unknown
-        landing_lie_dropdown.send_keys(landing_lie_code)
-        
-        # Input landing distance
-        landing_distance_input = wait.until(
-            EC.presence_of_element_located((By.ID, "end_distance"))
-        )
-        landing_distance_input.send_keys(str(landing_distance))
-        landing_distance_input.send_keys(Keys.RETURN)
-        
-        # Wait for and retrieve strokes gained value
-        strokes_gained_element = wait.until(
-            EC.presence_of_element_located((By.ID, "strokes-gained-result"))
-        )
-        return strokes_gained_element.text
-        
-    except TimeoutException:
-        print(f"Timeout waiting for elements: {start_lie} ({start_lie_code}), {start_distance}, {landing_lie} ({landing_lie_code}), {landing_distance}")
-        return ''
+        player_df = pd.read_csv(player_data_path)
+        course_df = pd.read_csv(course_data_path)
+        return player_df, course_df
     except Exception as e:
-        print(f"Error: {e}")
-        return ''
-    finally:
-        driver.quit()
+        st.error(f"Error loading data: {e}")
+        return None, None
 
-def calculate_strokes_gained(df):
-    """
-    Loop through shots and retrieve strokes gained for each.
-    """
-    def process_distance(distance):
-        try:
-            return int(float(distance)) if pd.notna(distance) else ''
-        except (ValueError, TypeError):
-            return ''
-
-    def determine_start_lie(row):
-        # First shot on any hole is from the tee
-        if row['shot'] == 1:
-            return 'Tee'
-        # For other shots, use the previous shot's landing location
-        return row['tee_ball_location']
-
-    df['strokes_gained'] = df.apply(
-        lambda row: get_strokes_gained(
-            # Start lie - always Tee for first shot of hole
-            determine_start_lie(row),
-            # Start distance
-            process_distance(row['starting_distance']),
-            # Landing lie
-            row['tee_ball_location'],
-            # Landing distance
-            process_distance(row['approach_distance'])
-        ) if pd.notna(row['starting_distance']) and pd.notna(row['approach_distance']) else '', axis=1
+def create_analysis_df(player_df, course_df):
+    """Create a new DataFrame combining data from player and course DataFrames"""
+    # Merge the dataframes on course_name and hole_number
+    merged_df = pd.merge(
+        player_df,
+        course_df,
+        on=['course_name', 'hole_number'],
+        how='left',
+        suffixes=('', '_course')
     )
-    return df
+    
+    # Filter to include only the specified columns
+    columns_to_keep = [
+        'player_name', 'tournament_name', 'start_date', 'course_name', 'round_id', 
+        'hole_number', 'gir', 'par', 'sand', 'score', 'putts', 'in_position', 
+        'tee_ball_location', 'approach_distance', 'putt_one_distance', 
+        'putt_two_distance', 'putt_three_distance', 'putt_four_distance', 
+        'putt_five_distance', 'second_shot', 'gir_of_third', 'lay_up_location', 
+        'go_for_location', 'yardage'
+    ]
+    
+    # Only keep columns that exist in the merged DataFrame
+    available_columns = [col for col in columns_to_keep if col in merged_df.columns]
+    filtered_df = merged_df[available_columns]
+    
+    return filtered_df
 
-# Load data
-round_file = "Joe_Pagdin_Lake_Las_Vegas_02_24_2025.csv"  # Placeholder for uploaded file
-course_table_file = "las_vegas_starting_distance_table.csv"  # Placeholder for uploaded table
-df = load_data(round_file, course_table_file)
+def create_shot_by_shot_df(filtered_df):
+    """
+    Expand the DataFrame to create one row per shot based on the score column
+    """
+    # Create an empty list to store the expanded rows
+    expanded_rows = []
+    
+    # Iterate through each row in the filtered DataFrame
+    for _, row in filtered_df.iterrows():
+        score = row['score']
+        
+        # Create a row for each shot
+        for shot_number in range(1, int(score) + 1):
+            # Create a copy of the original row
+            shot_row = row.copy()
+            
+            # Add a shot number column
+            shot_row['shot_number'] = shot_number
+            
+            # Determine starting location lie and distance based on shot number
+            if shot_number == 1:
+                # First shot is from the tee
+                shot_row['starting_location_lie'] = 'tee'
+                
+                # For par 3 holes, use approach_distance instead of yardage
+                if row['par'] == 3 and 'approach_distance' in row and pd.notna(row['approach_distance']):
+                    shot_row['starting_location_distance'] = row['approach_distance']
+                else:
+                    shot_row['starting_location_distance'] = row['yardage']
+            elif shot_number == 2:
+                # Second shot location depends on tee shot
+                if row['tee_ball_location'] is not None and pd.notna(row['tee_ball_location']):
+                    shot_row['starting_location_lie'] = row['tee_ball_location']
+                else:
+                    shot_row['starting_location_lie'] = 'unknown'
+                
+                # Use approach distance if available for second shot
+                if 'approach_distance' in row and pd.notna(row['approach_distance']):
+                    shot_row['starting_location_distance'] = row['approach_distance']
+                else:
+                    shot_row['starting_location_distance'] = None
+            elif shot_number > row['putts'] + 1:
+                # Shots before putting (approach or around green)
+                shot_row['starting_location_lie'] = 'approach'
+                shot_row['starting_location_distance'] = None
+            else:
+                # Putting
+                putt_number = shot_number - (score - row['putts'])
+                putt_distance_col = f'putt_{putt_number}_distance'
+                
+                shot_row['starting_location_lie'] = 'green'
+                if putt_distance_col in row and pd.notna(row[putt_distance_col]):
+                    shot_row['starting_location_distance'] = row[putt_distance_col]
+                else:
+                    shot_row['starting_location_distance'] = None
+            
+            # Add the row to our list
+            expanded_rows.append(shot_row)
+    
+    # Create a new DataFrame from the expanded rows
+    shot_by_shot_df = pd.DataFrame(expanded_rows)
+    
+    return shot_by_shot_df
 
-# Assign shot numbers
-df = assign_shot_numbers(df)
+def run_streamlit_app():
+    """Run the Streamlit app"""
+    st.title("Golf Performance Analysis")
+    
+    # File uploaders
+    player_data = st.file_uploader("Upload player data CSV", type="csv")
+    course_data = st.file_uploader("Upload course data CSV", type="csv")
+    
+    if player_data is not None and course_data is not None:
+        player_df, course_df = load_data(player_data, course_data)
+        
+        if player_df is not None and course_df is not None:
+            st.success("Data loaded successfully!")
+            
+            # Display raw data
+            st.subheader("Player Data Preview")
+            st.dataframe(player_df.head())
+            
+            st.subheader("Course Data Preview")
+            st.dataframe(course_df)
+            
+            # Create analysis DataFrame
+            analysis_df = create_analysis_df(player_df, course_df)
+            
+            # Check if yardage is present in the analysis_df
+            st.subheader("Yardage Check")
+            if 'yardage' in analysis_df.columns:
+                st.write("Yardage column is present in the analysis DataFrame")
+                st.write(f"Sample yardage values: {analysis_df['yardage'].head().tolist()}")
+            else:
+                st.write("Yardage column is missing from the analysis DataFrame")
+                st.write(f"Available columns: {analysis_df.columns.tolist()}")
+            
+            # Create shot-by-shot DataFrame
+            shot_by_shot_df = create_shot_by_shot_df(analysis_df)
+            
+            # Display analysis data
+            st.subheader("Combined Analysis Data Preview")
+            st.dataframe(analysis_df.head())
+            
+            st.subheader("Shot-by-Shot Data Preview")
+            st.dataframe(shot_by_shot_df)
+            
+            # Display some statistics
+            st.subheader("Shot Statistics")
+            st.write(f"Total shots in dataset: {len(shot_by_shot_df)}")
+            
+            # Group by round_id and count shots
+            shots_per_round = shot_by_shot_df.groupby('round_id').size().reset_index(name='shots')
+            st.write("Shots per round:")
+            st.dataframe(shots_per_round)
 
-# Determine starting distance
-df = determine_starting_distance(df)
-
-# Calculate strokes gained
-df = calculate_strokes_gained(df)
-
-# Show processed data
-print(df.head())
-
-# Create output filename using player name and date
-player_name = df['player_name'].iloc[0].replace(" ", "_")
-date = df['start_date'].iloc[0]
-output_file = f"{player_name}_{date}_processed.csv"
-
-# Save to CSV
-df.to_csv(output_file, index=False)
-print(f"\nData saved to {output_file}")
-
-
+if __name__ == "__main__":
+    run_streamlit_app()
 
 

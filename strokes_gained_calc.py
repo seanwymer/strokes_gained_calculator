@@ -51,6 +51,9 @@ def create_shot_by_shot_df(filtered_df):
     # Iterate through each row in the filtered DataFrame
     for _, row in filtered_df.iterrows():
         score = row['score']
+        previous_landing_lie = None
+        previous_landing_distance = None
+        used_putt_one = False  # Track if putt_one_distance was used
         
         # Create a row for each shot
         for shot_number in range(1, int(score) + 1):
@@ -60,9 +63,9 @@ def create_shot_by_shot_df(filtered_df):
             # Add a shot number column
             shot_row['shot_number'] = shot_number
             
-            # Determine starting location lie and distance based on shot number
+            # First shot is always from the tee
             if shot_number == 1:
-                # First shot is from the tee
+                # First shot logic remains unchanged
                 shot_row['starting_location_lie'] = 'tee'
                 
                 # For par 3 holes, use approach_distance instead of yardage
@@ -76,10 +79,10 @@ def create_shot_by_shot_df(filtered_df):
                     if row['gir'] == True:
                         shot_row['landing_location_lie'] = 'green'
                         shot_row['landing_location_distance'] = row.get('putt_one_distance')
+                        used_putt_one = True  # Mark that we used putt_one_distance
                     elif row['sand'] == True:
                         shot_row['landing_location_lie'] = 'sand'
                         shot_row['landing_location_distance'] = None
-                        # Add to manual input list
                         manual_input_needed.append({
                             'round_id': row['round_id'],
                             'hole_number': row['hole_number'],
@@ -89,7 +92,6 @@ def create_shot_by_shot_df(filtered_df):
                     else:
                         shot_row['landing_location_lie'] = None
                         shot_row['landing_location_distance'] = None
-                        # Add to manual input list
                         manual_input_needed.append({
                             'round_id': row['round_id'],
                             'hole_number': row['hole_number'],
@@ -100,12 +102,10 @@ def create_shot_by_shot_df(filtered_df):
                     # For par 4 and par 5 holes
                     if pd.notna(row['tee_ball_location']):
                         shot_row['landing_location_lie'] = row['tee_ball_location']
-                        # Use approach_distance for fairway, rough, and trap
                         if shot_row['landing_location_lie'] in ['fairway', 'rough', 'trap'] and pd.notna(row.get('approach_distance')):
                             shot_row['landing_location_distance'] = row.get('approach_distance')
                         else:
                             shot_row['landing_location_distance'] = None
-                            # Add to manual input list if not in the specified locations or missing approach distance
                             manual_input_needed.append({
                                 'round_id': row['round_id'],
                                 'hole_number': row['hole_number'],
@@ -115,7 +115,6 @@ def create_shot_by_shot_df(filtered_df):
                     else:
                         shot_row['landing_location_lie'] = None
                         shot_row['landing_location_distance'] = None
-                        # Add to manual input list
                         manual_input_needed.append({
                             'round_id': row['round_id'],
                             'hole_number': row['hole_number'],
@@ -124,68 +123,156 @@ def create_shot_by_shot_df(filtered_df):
                         })
             
             elif shot_number == 2:
-                # Second shot location depends on tee shot
-                if row['tee_ball_location'] is not None and pd.notna(row['tee_ball_location']):
-                    shot_row['starting_location_lie'] = row['tee_ball_location']
-                else:
-                    shot_row['starting_location_lie'] = 'unknown'
+                # Second shot logic
+                shot_row['starting_location_lie'] = previous_landing_lie
+                shot_row['starting_location_distance'] = previous_landing_distance
                 
-                # Use approach distance if available for second shot
-                if 'approach_distance' in row and pd.notna(row['approach_distance']):
-                    shot_row['starting_location_distance'] = row['approach_distance']
-                else:
-                    shot_row['starting_location_distance'] = None
+                if previous_landing_lie is None:
+                    manual_input_needed.append({
+                        'round_id': row['round_id'],
+                        'hole_number': row['hole_number'],
+                        'shot_number': shot_number,
+                        'missing_data': 'starting_location_lie and starting_location_distance'
+                    })
                 
-                # Landing location for second shot
-                # For now, we'll set these to None and track for manual input
-                shot_row['landing_location_lie'] = None
-                shot_row['landing_location_distance'] = None
-                manual_input_needed.append({
-                    'round_id': row['round_id'],
-                    'hole_number': row['hole_number'],
-                    'shot_number': shot_number,
-                    'missing_data': 'landing_location_lie and landing_location_distance'
-                })
+                if shot_number == score:
+                    shot_row['landing_location_lie'] = 'in the hole'
+                    shot_row['landing_location_distance'] = 0
+                elif row['par'] == 4:
+                    if row['gir'] == True:
+                        shot_row['landing_location_lie'] = 'green'
+                        shot_row['landing_location_distance'] = row.get('putt_one_distance')
+                        used_putt_one = True  # Mark that we used putt_one_distance
+                    elif row['sand'] == True:
+                        shot_row['landing_location_lie'] = 'sand'
+                        shot_row['landing_location_distance'] = None
+                        manual_input_needed.append({
+                            'round_id': row['round_id'],
+                            'hole_number': row['hole_number'],
+                            'shot_number': shot_number,
+                            'missing_data': 'landing_location_distance'
+                        })
+                    else:
+                        shot_row['landing_location_lie'] = None
+                        shot_row['landing_location_distance'] = None
+                        manual_input_needed.append({
+                            'round_id': row['round_id'],
+                            'hole_number': row['hole_number'],
+                            'shot_number': shot_number,
+                            'missing_data': 'landing_location_lie and landing_location_distance'
+                        })
+                else:
+                    shot_row['landing_location_lie'] = None
+                    shot_row['landing_location_distance'] = None
+                    manual_input_needed.append({
+                        'round_id': row['round_id'],
+                        'hole_number': row['hole_number'],
+                        'shot_number': shot_number,
+                        'missing_data': 'landing_location_lie and landing_location_distance'
+                    })
             
-            elif shot_number > row['putts'] + 1:
-                # Shots before putting (approach or around green)
-                shot_row['starting_location_lie'] = 'approach'
-                shot_row['starting_location_distance'] = None
+            elif shot_number == 3:
+                # Third shot logic
+                shot_row['starting_location_lie'] = previous_landing_lie
+                shot_row['starting_location_distance'] = previous_landing_distance
                 
-                # Landing location for approach shots
-                # For now, we'll set these to None and track for manual input
-                shot_row['landing_location_lie'] = None
-                shot_row['landing_location_distance'] = None
-                manual_input_needed.append({
-                    'round_id': row['round_id'],
-                    'hole_number': row['hole_number'],
-                    'shot_number': shot_number,
-                    'missing_data': 'landing_location_lie and landing_location_distance'
-                })
-            
-            else:
-                # Putting
-                putt_number = shot_number - (score - row['putts'])
-                putt_distance_col = f'putt_{putt_number}_distance'
+                if previous_landing_lie is None:
+                    manual_input_needed.append({
+                        'round_id': row['round_id'],
+                        'hole_number': row['hole_number'],
+                        'shot_number': shot_number,
+                        'missing_data': 'starting_location_lie and starting_location_distance'
+                    })
                 
-                shot_row['starting_location_lie'] = 'green'
-                if putt_distance_col in row and pd.notna(row[putt_distance_col]):
-                    shot_row['starting_location_distance'] = row[putt_distance_col]
-                else:
-                    shot_row['starting_location_distance'] = None
-                
-                # Landing location for putts
-                next_putt_col = f'putt_{putt_number + 1}_distance'
-                if putt_number < row['putts']:
+                if shot_number == score:
+                    shot_row['landing_location_lie'] = 'in the hole'
+                    shot_row['landing_location_distance'] = 0
+                elif previous_landing_lie == 'green' and used_putt_one:
+                    # If previous shot landed on green and used putt_one_distance
                     shot_row['landing_location_lie'] = 'green'
-                    if next_putt_col in row and pd.notna(row[next_putt_col]):
-                        shot_row['landing_location_distance'] = row[next_putt_col]
+                    if pd.notna(row.get('putt_two_distance')):
+                        shot_row['landing_location_distance'] = row.get('putt_two_distance')
                     else:
                         shot_row['landing_location_distance'] = None
+                        manual_input_needed.append({
+                            'round_id': row['round_id'],
+                            'hole_number': row['hole_number'],
+                            'shot_number': shot_number,
+                            'missing_data': 'landing_location_distance'
+                        })
+                elif row['par'] == 5:
+                    if row['gir'] == True:
+                        shot_row['landing_location_lie'] = 'green'
+                        shot_row['landing_location_distance'] = row.get('putt_one_distance')
+                        used_putt_one = True  # Mark that we used putt_one_distance
+                    elif row['sand'] == True:
+                        shot_row['landing_location_lie'] = 'sand'
+                        shot_row['landing_location_distance'] = None
+                        manual_input_needed.append({
+                            'round_id': row['round_id'],
+                            'hole_number': row['hole_number'],
+                            'shot_number': shot_number,
+                            'missing_data': 'landing_location_distance'
+                        })
+                    else:
+                        shot_row['landing_location_lie'] = None
+                        shot_row['landing_location_distance'] = None
+                        manual_input_needed.append({
+                            'round_id': row['round_id'],
+                            'hole_number': row['hole_number'],
+                            'shot_number': shot_number,
+                            'missing_data': 'landing_location_lie and landing_location_distance'
+                        })
                 else:
-                    # Last putt goes in the hole
-                    shot_row['landing_location_lie'] = 'hole'
+                    shot_row['landing_location_lie'] = None
+                    shot_row['landing_location_distance'] = None
+                    manual_input_needed.append({
+                        'round_id': row['round_id'],
+                        'hole_number': row['hole_number'],
+                        'shot_number': shot_number,
+                        'missing_data': 'landing_location_lie and landing_location_distance'
+                    })
+            
+            else:
+                # For shots after the third
+                shot_row['starting_location_lie'] = previous_landing_lie
+                shot_row['starting_location_distance'] = previous_landing_distance
+                
+                if previous_landing_lie is None:
+                    manual_input_needed.append({
+                        'round_id': row['round_id'],
+                        'hole_number': row['hole_number'],
+                        'shot_number': shot_number,
+                        'missing_data': 'starting_location_lie and starting_location_distance'
+                    })
+                
+                if shot_number == score:
+                    shot_row['landing_location_lie'] = 'in the hole'
                     shot_row['landing_location_distance'] = 0
+                elif shot_number > (score - row['putts']):
+                    # Putting (not the last putt)
+                    putt_number = shot_number - (score - row['putts'])
+                    next_putt_col = f'putt_{putt_number + 1}_distance'
+                    
+                    if putt_number < row['putts']:
+                        shot_row['landing_location_lie'] = 'green'
+                        if next_putt_col in row and pd.notna(row[next_putt_col]):
+                            shot_row['landing_location_distance'] = row[next_putt_col]
+                        else:
+                            shot_row['landing_location_distance'] = None
+                else:
+                    shot_row['landing_location_lie'] = None
+                    shot_row['landing_location_distance'] = None
+                    manual_input_needed.append({
+                        'round_id': row['round_id'],
+                        'hole_number': row['hole_number'],
+                        'shot_number': shot_number,
+                        'missing_data': 'landing_location_lie and landing_location_distance'
+                    })
+            
+            # Store the landing location for the next shot's starting location
+            previous_landing_lie = shot_row['landing_location_lie']
+            previous_landing_distance = shot_row['landing_location_distance']
             
             # Add the row to our list
             expanded_rows.append(shot_row)
